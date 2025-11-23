@@ -1,5 +1,5 @@
 # core/audio_engine.py
-import kanha_core # The Compiled Rust Pyd
+import kanha_core # type: ignore # The Compiled Rust Pyd
 
 def generate_waveform_fast(video_path: str, resolution: int = 1500):
     """Wrapper to call Rust engine safely"""
