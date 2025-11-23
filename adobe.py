@@ -1,21 +1,23 @@
 import sys
+import os
+import vlc #type: ignore
 from PySide6.QtWidgets import (QApplication, QMainWindow, QDockWidget, QWidget, 
                                QVBoxLayout, QHBoxLayout, QLabel, QTreeWidget, QTreeWidgetItem,
-                               QFrame, QPushButton, QGraphicsView, QGraphicsScene, QStyle, QSizePolicy)
-from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QColor, QPen
+                               QFrame, QPushButton, QGraphicsView, QGraphicsScene, 
+                               QStyle, QFileDialog, QSlider)
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QColor, QPen, QIcon
 
 # =====================================================
-#  THE ADOBE STYLING (Tweaked for visibility)
+#  THE "PRO" ADOBE STYLE (RESTORED)
 # =====================================================
 ADOBE_STYLESHEET = """
 QMainWindow {
     background-color: #1d1d1d;
 }
-/* SEPARATORS & DOCKS */
 QDockWidget {
     border: 1px solid #000;
-    titlebar-close-icon: url(none); /* Hide close button to keep layout rigid */
+    titlebar-close-icon: url(none);
     titlebar-normal-icon: url(none);
 }
 QDockWidget::title {
@@ -29,296 +31,291 @@ QDockWidget::title {
     font-family: 'Segoe UI';
     border-bottom: 1px solid #000;
 }
-/* TAB STYLING (For the panels) */
-QTabWidget::pane { border: 1px solid #333; background: #1e1e1e; }
-QTabBar::tab {
-    background: #252525;
-    color: #888;
-    padding: 6px 12px;
-    font-family: 'Segoe UI';
-    font-size: 11px;
-    border-top-left-radius: 3px;
-    border-top-right-radius: 3px;
-}
-QTabBar::tab:selected {
-    background: #383838;
-    color: #ddd;
-    border-top: 2px solid #3997f3;
-}
-
-/* TIMELINE TRACKS */
-QFrame#TimelineHeader { background-color: #2b2b2b; border-right: 1px solid #444; }
-QFrame#TrackControl { background-color: #262626; border-bottom: 1px solid #1a1a1a; min-height: 50px; }
-QFrame#TimelineArea { background-color: #181818; }
-
-/* TRANSPORT BUTTONS */
-QPushButton[class="transport"] {
+/* BUTTONS */
+QPushButton.transport {
     background-color: transparent;
     border: none;
     color: #ddd;
-    font-size: 18px; /* Bigger Icons */
+    font-size: 16px;
     font-weight: bold;
 }
-QPushButton[class="transport"]:hover { color: #3997f3; }
+QPushButton.transport:hover { color: #3997f3; }
 
-/* DATA LISTS */
+/* LISTS */
 QTreeWidget { 
-    background-color: #1b1b1b; 
+    background-color: #1e1e1e; 
     border: none; 
     color: #ccc; 
     font-size: 11px;
 }
 QHeaderView::section {
-    background-color: #2a2a2a;
+    background-color: #2d2d2d;
     color: #aaa;
     border: none;
     border-right: 1px solid #111;
     padding: 4px;
 }
+
+/* TIMELINE & SCROLL */
+QSlider::groove:horizontal {
+    height: 4px;
+    background: #333;
+    border-radius: 2px;
+}
+QSlider::handle:horizontal {
+    background: #3997f3;
+    width: 12px;
+    margin: -4px 0;
+    border-radius: 6px;
+}
+QFrame#TimelineHeader { background-color: #2b2b2b; border-right: 1px solid #444; }
+QFrame#TrackControl { background-color: #262626; border-bottom: 1px solid #1a1a1a; min-height: 50px; }
 """
 
-class PremiereMainWindow(QMainWindow):
+class KanhaStudioPro(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Kanha Studio 2025 (Qt Pro)")
-        self.resize(1600, 900)
+        self.setWindowTitle("Kanha Studio 2025 (Adobe Edition)")
+        self.resize(1920, 1080)
         self.setStyleSheet(ADOBE_STYLESHEET)
         
-        # 1. Configure Global Docking Behavior
+        # --- LOGIC ENGINE (VLC) ---
+        self.vlc_instance = vlc.Instance()
+        self.player = self.vlc_instance.media_player_new()
+        self.timer = QTimer(self)
+        self.timer.setInterval(50)
+        self.timer.timeout.connect(self.update_ui)
+
+        # --- LAYOUT ENGINE ---
+        # This makes the docks behave like panels
         self.setDockOptions(QMainWindow.AllowNestedDocks | QMainWindow.AnimatedDocks)
         
-        # Crucial: Set corner ownership so the Tool strip spans the full height
+        # These settings FORCE the left tool strip to go all the way down
         self.setCorner(Qt.TopLeftCorner, Qt.LeftDockWidgetArea)
         self.setCorner(Qt.BottomLeftCorner, Qt.LeftDockWidgetArea)
 
         self.create_menus()
-        self.init_ui_components()
-        self.setup_default_layout() # <--- This fixes the "Messed Up" look
+        self.build_layout()
+        
+        # Force the sizes AFTER the UI is built
+        self.setup_pro_grid()
 
     def create_menus(self):
         bar = self.menuBar()
         bar.setStyleSheet("background-color: #1d1d1d; color: #ccc; font-size: 12px;")
-        for m in ["File", "Edit", "Clip", "Sequence", "Markers", "Graphics", "View", "Window", "Help"]:
-            bar.addMenu(m)
+        bar.addMenu("File").addAction("Import Media...", self.import_file)
+        bar.addMenu("Edit")
+        bar.addMenu("Sequence")
 
-    def init_ui_components(self):
-        # We store references to the docks so we can resize them later
-        
-        # 1. TOOLS (The thin strip on the left)
+    def build_layout(self):
+        # 1. TOOLS (Left Strip)
         self.dock_tools = QDockWidget("Tools", self)
-        self.dock_tools.setFeatures(QDockWidget.NoDockWidgetFeatures) # Lock it in place usually
-        self.dock_tools.setTitleBarWidget(QWidget()) # Completely hide title bar for cleaner look
-        self.dock_tools.setFixedWidth(35)
-        self.dock_tools.setWidget(self.create_tool_strip())
+        self.dock_tools.setFixedWidth(40)
+        self.dock_tools.setTitleBarWidget(QWidget()) # Hides titlebar completely
+        self.dock_tools.setFeatures(QDockWidget.NoDockWidgetFeatures)
+        self.dock_tools.setWidget(self.make_tool_strip())
         self.addDockWidget(Qt.LeftDockWidgetArea, self.dock_tools)
 
         # 2. PROJECT BIN
         self.dock_project = QDockWidget("Project: Kanha_Edit", self)
-        self.dock_project.setWidget(self.create_project_bin())
-        self.dock_project.setObjectName("DockProject")
+        self.project_tree = QTreeWidget()
+        self.project_tree.setHeaderLabels(["Name", "Details", "Type"])
+        self.project_tree.itemDoubleClicked.connect(self.on_project_double_click)
+        self.dock_project.setWidget(self.project_tree)
+        self.dock_project.setObjectName("D_Project")
 
-        # 3. TIMELINE (The centerpiece)
+        # 3. TIMELINE
         self.dock_timeline = QDockWidget("Sequence 01", self)
-        self.dock_timeline.setWidget(self.create_complex_timeline())
-        self.dock_timeline.setObjectName("DockTimeline")
+        self.dock_timeline.setWidget(self.make_timeline())
+        self.dock_timeline.setObjectName("D_Timeline")
 
         # 4. SOURCE MONITOR
         self.dock_source = QDockWidget("Source: (No Clip)", self)
-        # Give it a black graphics view just like Program
-        src_view = QGraphicsView()
-        src_view.setStyleSheet("border: none; background: #000;")
-        self.dock_source.setWidget(src_view)
-        self.dock_source.setObjectName("DockSource")
+        src_lbl = QLabel("Source Monitor", alignment=Qt.AlignCenter)
+        src_lbl.setStyleSheet("background: #000;")
+        self.dock_source.setWidget(src_lbl)
+        self.dock_source.setObjectName("D_Source")
 
-        # 5. PROGRAM MONITOR
+        # 5. PROGRAM MONITOR (Video Player)
         self.dock_program = QDockWidget("Program: Sequence 01", self)
-        self.dock_program.setWidget(self.create_program_monitor())
-        self.dock_program.setObjectName("DockProgram")
+        self.dock_program.setWidget(self.make_program_monitor())
+        self.dock_program.setObjectName("D_Program")
 
-        # Note: We DO NOT call addDockWidget here randomly.
-        # We let setup_default_layout handle the placement.
+        # Don't add docks yet, run setup_pro_grid
 
-    def setup_default_layout(self):
-        """ 
-        THE MAGIC SAUCE.
-        This function forcibly arranges the windows into the standard NLE Grid.
-        """
-        # Clear State (if any)
-        # Note: Qt builds layouts by 'splitting' existing docks.
-        
-        # Start by placing the Timeline at the bottom, occupying everything
+    def setup_pro_grid(self):
+        """ The Logic that creates the exact Adobe Layout """
+        # 1. Add Timeline at bottom
         self.addDockWidget(Qt.BottomDockWidgetArea, self.dock_timeline)
         
-        # Split the Timeline: Put the Project Bin to the LEFT of the Timeline
+        # 2. Put Project Bin to the LEFT of Timeline
         self.splitDockWidget(self.dock_timeline, self.dock_project, Qt.Horizontal)
         
-        # Add the Program Monitor to the Top
+        # 3. Add Program to Top
         self.addDockWidget(Qt.TopDockWidgetArea, self.dock_program)
         
-        # Split the Program Monitor: Put Source Monitor to the LEFT of Program
+        # 4. Put Source to LEFT of Program
         self.splitDockWidget(self.dock_program, self.dock_source, Qt.Horizontal)
 
-        # FORCE SIZES
-        # Logic: width ratio lists. 
-        # Top Row: [Source (40%), Program (60%)]
-        self.resizeDocks([self.dock_source, self.dock_program], [600, 900], Qt.Horizontal)
-        
-        # Bottom Row: [Project (30%), Timeline (70%)]
+        # 5. Set Dimensions (Simulated)
+        # Timeline/Project should take up bottom 40%
+        # Project bin width ~400px
         self.resizeDocks([self.dock_project, self.dock_timeline], [400, 1200], Qt.Horizontal)
-        
-        # Vertical Split: [Top (55%), Bottom (45%)]
         self.resizeDocks([self.dock_program, self.dock_timeline], [500, 400], Qt.Vertical)
 
-    # --- WIDGET FACTORIES ---
+    # --- WIDGET MAKERS ---
 
-    def create_program_monitor(self):
+    def make_program_monitor(self):
         frame = QFrame()
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(0,0,0,0)
         layout.setSpacing(0)
         
-        # Graphic View
-        view = QGraphicsView()
-        view.setStyleSheet("background: black; border: none;")
-        view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # Video Surface
+        self.video_surface = QFrame()
+        self.video_surface.setStyleSheet("background-color: black; border: 1px solid #111;")
+        layout.addWidget(self.video_surface)
         
-        scene = QGraphicsScene()
-        scene.setBackgroundBrush(QColor("#000"))
-        view.setScene(scene)
-        
-        # Fake Video Box
-        # We center a 16:9 rectangle
-        scene.addRect(0,0, 1280, 720, pen=QPen(Qt.NoPen), brush=QColor(10,10,10))
-        
-        # The Blue Transformation Handle (Fake overlay)
-        box_pen = QPen(QColor("#3997f3"))
-        box_pen.setWidth(2)
-        rect = scene.addRect(200, 100, 880, 520, pen=box_pen)
-        
-        layout.addWidget(view)
-        
-        # Controls
+        # Controls Area
         controls = QFrame()
-        controls.setStyleSheet("background: #1d1d1d; min-height: 40px; max-height: 40px; border-top: 1px solid #111;")
+        controls.setStyleSheet("background: #1d1d1d; min-height: 35px; border-top: 1px solid #000;")
         h_layout = QHBoxLayout(controls)
-        h_layout.setContentsMargins(10,0,10,0)
+        h_layout.setContentsMargins(10, 0, 10, 0)
         
-        tc = QLabel("00:01:02:10")
-        tc.setStyleSheet("color: #3997f3; font-family: Consolas; font-size: 14px; font-weight: bold;")
-        h_layout.addWidget(tc)
+        self.tc_lbl = QLabel("00:00:00:00")
+        self.tc_lbl.setStyleSheet("color: #3997f3; font-family: Consolas; font-weight: bold;")
+        h_layout.addWidget(self.tc_lbl)
         
         h_layout.addStretch()
         
-        btns = ["⏮", "⏪", "▶", "⏩", "⏭"]
-        for t in btns:
-            b = QPushButton(t)
-            b.setProperty("class", "transport")
-            b.setCursor(Qt.PointingHandCursor)
-            h_layout.addWidget(b)
+        # Play/Pause buttons
+        for icon, func in [("⏪", None), ("▶", self.toggle_play), ("⏩", None), ("📷", None)]:
+            btn = QPushButton(icon)
+            btn.setProperty("class", "transport")
+            if func: btn.clicked.connect(func)
+            h_layout.addWidget(btn)
             
         h_layout.addStretch()
         
-        # Cam/Settings icons
-        snap = QPushButton("📷")
-        snap.setProperty("class", "transport")
-        h_layout.addWidget(snap)
+        # Timeline Scrubber under controls or above? Premiere puts controls *under* video
+        self.slider = QSlider(Qt.Horizontal)
+        self.slider.setRange(0, 1000)
+        self.slider.sliderPressed.connect(self.pause_video)
+        self.slider.sliderReleased.connect(self.seek_video)
         
+        layout.addWidget(self.slider)
         layout.addWidget(controls)
         return frame
 
-    def create_project_bin(self):
-        tree = QTreeWidget()
-        tree.setHeaderLabels(["Name", "Frame Rate", "Media Duration", "Type"])
-        tree.setAlternatingRowColors(True) # Stripes
-        tree.setStyleSheet("alternate-background-color: #222;")
-        
-        data = [
-            ("Interview_CamA_4K.mp4", "23.976", "00:14:02:05", "Movie"),
-            ("Interview_CamB_4K.mp4", "23.976", "00:14:05:11", "Movie"),
-            ("B-Roll_City.mov", "60.00", "00:00:45:00", "Movie"),
-            ("Background_Music.wav", "48000 Hz", "00:03:12:00", "Audio"),
-            ("Drone_Shot_01.mov", "59.94", "00:00:20:00", "Movie"),
-        ]
-        
-        # Correct standard icon fetch
-        icon = self.style().standardIcon(QStyle.SP_FileIcon)
-        
-        for row in data:
-            item = QTreeWidgetItem(row)
-            item.setIcon(0, icon)
-            tree.addTopLevelItem(item)
-            
-        return tree
-
-    def create_complex_timeline(self):
-        # Main Container
+    def make_timeline(self):
         container = QFrame()
-        layout = QHBoxLayout(container)
-        layout.setContentsMargins(0,0,0,0)
-        layout.setSpacing(0)
+        l = QHBoxLayout(container)
+        l.setContentsMargins(0,0,0,0); l.setSpacing(0)
         
-        # 1. Left Headers
+        # Headers
         headers = QFrame()
         headers.setObjectName("TimelineHeader")
         headers.setFixedWidth(100)
-        v_layout = QVBoxLayout(headers)
-        v_layout.setContentsMargins(0,0,0,0)
-        v_layout.setSpacing(1)
+        v = QVBoxLayout(headers); v.setSpacing(1); v.setContentsMargins(0,0,0,0)
         
-        track_names = ["V3", "V2", "V1", "", "A1", "A2", "A3"]
-        colors = ["#888"]*3 + ["#000"] + ["#888"]*3 # Gap for visual separation
-        
-        for i, name in enumerate(track_names):
+        for name in ["V3", "V2", "V1", "", "A1", "A2", "A3"]:
             row = QFrame()
-            if name == "": 
-                row.setStyleSheet("background: #222; max-height: 20px;") # Divider
-            else:
+            if name: 
                 row.setObjectName("TrackControl")
                 lbl = QLabel(name)
-                lbl.setStyleSheet("color: #777; font-weight: bold; padding-left: 5px;")
-                l = QVBoxLayout(row); l.addWidget(lbl); l.setAlignment(Qt.AlignVCenter)
-            v_layout.addWidget(row)
-            
-        v_layout.addStretch()
+                lbl.setStyleSheet("color: #777; padding-left: 5px; font-weight: bold;")
+                box = QVBoxLayout(row); box.addWidget(lbl); box.setAlignment(Qt.AlignVCenter)
+            else:
+                row.setStyleSheet("background: #222; max-height: 20px;")
+            v.addWidget(row)
+        v.addStretch()
         
-        # 2. Right Tracks area
+        # Tracks
         tracks = QFrame()
-        tracks.setObjectName("TimelineArea")
-        tracks_layout = QVBoxLayout(tracks)
-        # (In real implementation, this is a Custom Painted Widget, for now just a placeholder)
+        tracks.setStyleSheet("background: #181818;")
+        # Placeholder Logic
+        ctr = QVBoxLayout(tracks)
         lbl = QLabel("Sequences Go Here")
+        lbl.setStyleSheet("color: #333; font-size: 30px; font-weight: bold;")
         lbl.setAlignment(Qt.AlignCenter)
-        lbl.setStyleSheet("color: #444; font-size: 24px; font-weight: bold;")
-        tracks_layout.addWidget(lbl)
+        ctr.addWidget(lbl)
         
-        layout.addWidget(headers)
-        layout.addWidget(tracks)
-        
+        l.addWidget(headers)
+        l.addWidget(tracks)
         return container
 
-    def create_tool_strip(self):
-        strip = QFrame()
-        v = QVBoxLayout(strip)
-        v.setContentsMargins(0,15,0,10)
-        v.setSpacing(15)
-        
-        tools = ["⬉", "◫", "✄", "✎", "✋", "🔍"] 
-        for t in tools:
-            b = QPushButton(t)
-            b.setFixedSize(35,35)
-            b.setProperty("class", "transport")
-            b.setStyleSheet("color: #aaa;") 
+    def make_tool_strip(self):
+        f = QFrame()
+        v = QVBoxLayout(f)
+        v.setContentsMargins(0,10,0,10)
+        for i in ["⬉", "◫", "✄", "✎", "✋", "🔍"]:
+            b = QPushButton(i)
+            b.setFixedSize(30,30)
+            b.setStyleSheet("background: transparent; border: none; color: #aaa; font-size: 16px;")
             v.addWidget(b)
-            
         v.addStretch()
-        return strip
+        return f
+
+    # --- LOGIC ---
+
+    def import_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Import", "", "Video (*.mp4 *.mov *.mkv)")
+        if path:
+            name = os.path.basename(path)
+            item = QTreeWidgetItem([name, "Movie"])
+            item.setData(0, Qt.UserRole, path)
+            
+            icon = self.style().standardIcon(QStyle.SP_FileIcon)
+            item.setIcon(0, icon)
+            self.project_tree.addTopLevelItem(item)
+            
+            # Auto-load first clip
+            self.load_media(path)
+
+    def on_project_double_click(self, item, col):
+        path = item.data(0, Qt.UserRole)
+        if path: self.load_media(path)
+
+    def load_media(self, path):
+        self.player.stop()
+        m = self.vlc_instance.media_new(path)
+        self.player.set_media(m)
+        
+        # LINK VLC TO QT WIDGET
+        if sys.platform == "win32":
+            self.player.set_hwnd(int(self.video_surface.winId()))
+        
+        self.player.play()
+        self.timer.start()
+
+    def toggle_play(self):
+        if self.player.is_playing(): self.player.pause()
+        else: self.player.play()
+
+    def pause_video(self): self.player.pause()
+    def seek_video(self):
+        pos = self.slider.value()
+        self.player.set_position(pos / 1000.0)
+        self.player.play()
+
+    def update_ui(self):
+        if self.player.is_playing() and not self.slider.isSliderDown():
+            self.slider.setValue(int(self.player.get_position() * 1000))
+            
+            ms = self.player.get_time()
+            sec = max(0, ms // 1000)
+            m, s = divmod(sec, 60)
+            self.tc_lbl.setText(f"00:{m:02}:{s:02}:00")
+
+    def closeEvent(self, e):
+        self.player.stop()
+        e.accept()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     
-    window = PremiereMainWindow()
+    window = KanhaStudioPro()
     window.show()
     
     sys.exit(app.exec())
