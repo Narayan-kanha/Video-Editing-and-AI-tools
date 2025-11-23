@@ -1,0 +1,13 @@
+[package]
+name = "subtitle_engine"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "subtitle_engine"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.21.2", features = ["extension-module"] }
+# THIS IS THE CRITICAL UPGRADE: We are adding the 'format' and 'codec' features.
+ffmpeg-next = { version = "7.0.0", features = ["format", "codec"] }
