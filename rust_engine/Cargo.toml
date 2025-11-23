@@ -1,6 +1,13 @@
 [package]
-name = "rust_engine"
+name = "kanha_core"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+
+# This makes it a Python Plugin (.pyd / .so)
+[lib]
+name = "kanha_core"
+crate-type = ["cdylib"]
 
 [dependencies]
+pyo3 = { version = "0.20", features = ["extension-module"] }
+symphonia = { version = "0.5", features = ["aac", "mp3", "pcm", "isomp4", "mkv"] }
