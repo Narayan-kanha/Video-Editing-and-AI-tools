@@ -2,8 +2,6 @@
 
 A modular, non-linear video editing software built with Python and Qt6. Inspired by industry-standard NLE workflows.
 
-![Screenshot](screenshot.png) 
-*(Take a screenshot of your new customized layout and put it here)*
 
 ## 🚀 Features
 - **Professional Docking Interface:** Fully customizable, persistent layouts (Adobe-style).
