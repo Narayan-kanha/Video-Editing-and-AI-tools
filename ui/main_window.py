@@ -1,221 +1,269 @@
 import sys
 import os
 import vlc # type: ignore
-from PySide6.QtWidgets import (QMainWindow, QDockWidget, QLabel, QWidget, QFileDialog, QApplication, QMessageBox)
+from PySide6.QtWidgets import (QMainWindow, QDockWidget, QLabel, QWidget, 
+                               QFileDialog, QApplication, QMessageBox)
 from PySide6.QtCore import Qt, QTimer, QSettings
 
-# Import Widgets
+# Import ALL your widgets
 from .styles import ADOBE_STYLESHEET
 from .widgets.program_monitor import ProgramMonitor
 from .widgets.project_bin import ProjectBin
-from .widgets.timeline import Timeline
+from .widgets.timeline import Timeline  # (The one with Rust Waveforms)
 from .widgets.tools import ToolStrip
-from .widgets.effects_panel import EffectsPanel        # <--- NEW
-from .widgets.properties_panel import PropertiesPanel  # <--- NEW
+from .widgets.effects_panel import EffectsPanel
+from .widgets.properties_panel import PropertiesPanel
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Kanha Studio 2025 - Fully Customizable")
+        self.setWindowTitle("Kanha Studio 2025 - Pro")
         self.resize(1600, 900)
         self.setStyleSheet(ADOBE_STYLESHEET)
         
-        # Settings Manager (Persistent Layouts)
-        self.settings = QSettings("Kanha", "StudioPro")
+        # Persistent Settings (Layout Memory)
+        self.settings = QSettings("KanhaStudios", "KanhaEditor")
 
-        # --- CORE LOGIC ---
+        # --- VLC ENGINE ---
         self.vlc_inst = vlc.Instance()
         self.player = self.vlc_inst.media_player_new()
         
+        # Playback Timer (50ms updates)
         self.timer = QTimer(self)
         self.timer.setInterval(50)
-        self.timer.timeout.connect(self.update_clock)
+        self.timer.timeout.connect(self.update_ui_from_player)
 
-        # --- INIT UI ---
-        # 1. Docking Logic
+        # --- GUI BUILDER ---
+        # 1. Enable Advanced Docking
         self.setDockOptions(QMainWindow.AllowNestedDocks | QMainWindow.AnimatedDocks)
+        # Make left/right docks occupy the corners (Full Height)
         self.setCorner(Qt.TopLeftCorner, Qt.LeftDockWidgetArea)
         self.setCorner(Qt.BottomLeftCorner, Qt.LeftDockWidgetArea)
+        self.setCorner(Qt.TopRightCorner, Qt.RightDockWidgetArea)
+        self.setCorner(Qt.BottomRightCorner, Qt.RightDockWidgetArea)
         
-        # 2. Build Widgets
-        self.init_docks()
+        # 2. Instantiate All Panels
+        self.create_docks()
         
-        # 3. Build Menus (Dependent on Docks existing)
+        # 3. Build The Menu Bar
         self.create_menus()
         
-        # 4. Load Layout
-        self.restore_user_layout()
+        # 4. Restore Previous Layout (or Default)
+        self.restore_layout_state()
         
-        self.init_logic_connections()
+        # 5. Connect Signals (Clicks, drags, etc.)
+        self.init_connections()
 
-    def init_docks(self):
-        self.docks = {} # Keep track of docks for menus
+    def create_docks(self):
+        """ Initializes the 7 Dockable Panels """
+        self.docks_list = {} # Dictionary to track docks for Menus
 
-        # TOOL STRIP
-        self.dock_tools = self.create_dock("Tools", ToolStrip(), area=Qt.LeftDockWidgetArea)
+        # A. Tools (Left Strip)
+        self.dock_tools = QDockWidget("Tools", self)
         self.dock_tools.setFixedWidth(40)
-        self.dock_tools.setTitleBarWidget(QWidget()) # No title bar
+        self.dock_tools.setTitleBarWidget(QWidget()) # Hide title bar
         self.dock_tools.setFeatures(QDockWidget.NoDockWidgetFeatures) # Locked
+        self.dock_tools.setWidget(ToolStrip())
+        self.dock_tools.setObjectName("Tools") # Vital for restoreState
+        self.addDockWidget(Qt.LeftDockWidgetArea, self.dock_tools)
+        self.docks_list["Tools"] = self.dock_tools
 
-        # PROJECT BIN
+        # B. Project Bin (Assets)
         self.bin_widget = ProjectBin()
-        self.dock_project = self.create_dock("Project Files", self.bin_widget, "ProjectBin")
+        self.dock_project = self.wrap_in_dock("Project Bin", self.bin_widget, "ProjectBin")
 
-        # TIMELINE
+        # C. Timeline (Visualization)
         self.timeline_widget = Timeline()
-        self.dock_timeline = self.create_dock("Timeline", self.timeline_widget, "Timeline")
+        self.dock_timeline = self.wrap_in_dock("Timeline", self.timeline_widget, "Timeline")
         
-        # EFFECTS
+        # D. Effects Panel
         self.effects_widget = EffectsPanel()
-        self.dock_effects = self.create_dock("Effects Library", self.effects_widget, "Effects")
+        self.dock_effects = self.wrap_in_dock("Effects", self.effects_widget, "Effects")
 
-        # SOURCE
-        self.dock_source = self.create_dock("Source Monitor", QLabel("No Clip Loaded"), "Source")
+        # E. Source Monitor (Clip Preview)
+        # For now, just a placeholder black box
+        src_lbl = QLabel("No Clip Selected")
+        src_lbl.setAlignment(Qt.AlignCenter)
+        src_lbl.setStyleSheet("background:black; color:#555;")
+        self.dock_source = self.wrap_in_dock("Source Monitor", src_lbl, "Source")
 
-        # PROPERTIES (Font/Effects)
+        # F. Properties Panel (Font/Motion)
         self.props_widget = PropertiesPanel()
-        self.dock_props = self.create_dock("Effect Controls", self.props_widget, "Properties")
+        self.dock_props = self.wrap_in_dock("Effect Controls", self.props_widget, "Properties")
 
-        # PROGRAM
+        # G. Program Monitor (Main Video Player)
         self.monitor_widget = ProgramMonitor()
-        self.dock_program = self.create_dock("Program Monitor", self.monitor_widget, "Program")
+        self.dock_program = self.wrap_in_dock("Program Monitor", self.monitor_widget, "Program")
 
-    def create_dock(self, name, widget, object_name=None, area=None):
-        dock = QDockWidget(name, self)
+    def wrap_in_dock(self, title, widget, obj_name):
+        dock = QDockWidget(title, self)
         dock.setWidget(widget)
-        if object_name: dock.setObjectName(object_name)
-        
-        if area:
-            self.addDockWidget(area, dock)
-            
-        self.docks[name] = dock
+        dock.setObjectName(obj_name) # Vital for persistence
+        # Add to list for View Menu
+        self.docks_list[title] = dock
         return dock
 
     def create_menus(self):
         bar = self.menuBar()
         bar.setStyleSheet("background-color: #1d1d1d; color: #ccc;")
         
+        # FILE
         file = bar.addMenu("File")
         file.addAction("Import Media...", self.import_file)
         file.addSeparator()
-        file.addAction("Save Project State", self.save_current_layout)
+        file.addAction("Save Workspace", self.save_layout_state)
         file.addAction("Exit", self.close)
-
-        # THE VIEW BAR (Toggle Panels)
-        view = bar.addMenu("Window")
         
-        # Qt's toggleViewAction() automagically handles checks/visibility
-        for name, dock in self.docks.items():
-            view.addAction(dock.toggleViewAction())
-            
-        view.addSeparator()
-        
-        ws_menu = view.addMenu("Workspaces")
-        ws_menu.addAction("Reset to Default Editing", self.reset_to_default_editing)
-        ws_menu.addAction("Reset to Effects", self.reset_to_effects_layout)
+        # EDIT
+        edit = bar.addMenu("Edit")
+        edit.addAction("Undo")
+        edit.addAction("Redo")
+        edit.addSeparator()
+        edit.addAction("Preferences")
 
-    # -----------------------------
-    # LAYOUT ENGINE (Save/Load)
-    # -----------------------------
-    def reset_to_default_editing(self):
-        # 1. Timeline Bottom
+        # WINDOW (Toggle Panels)
+        window = bar.addMenu("Window")
+        # Workspaces Submenu
+        ws = window.addMenu("Workspaces")
+        ws.addAction("Reset to Editing", self.reset_layout_editing)
+        ws.addAction("Reset to Color/Effects", self.reset_layout_effects)
+        window.addSeparator()
+        
+        # Panel Toggles (Auto-syncs with dock visibility)
+        for title, dock in self.docks_list.items():
+            window.addAction(dock.toggleViewAction())
+
+    # ------------------------------------------
+    #  LAYOUT MANAGEMENT (The "Customizable" part)
+    # ------------------------------------------
+    def reset_layout_editing(self):
+        """ Adobe Premiere Standard Layout """
+        # 1. Timeline Bottom, Project Left Bottom
         self.addDockWidget(Qt.BottomDockWidgetArea, self.dock_timeline)
-        
-        # 2. Bin Left of Timeline
         self.splitDockWidget(self.dock_timeline, self.dock_project, Qt.Horizontal)
-        self.dock_project.show()
         
-        # 3. Effects Left of Project (Stacked)
+        # 2. Effects Tabbed with Project
         self.tabifyDockWidget(self.dock_project, self.dock_effects)
         
-        # 4. Program Top Right
+        # 3. Program Top Right
         self.addDockWidget(Qt.TopDockWidgetArea, self.dock_program)
-        self.dock_program.show()
         
-        # 5. Source Left of Program
+        # 4. Source Top Left
         self.splitDockWidget(self.dock_program, self.dock_source, Qt.Horizontal)
-        self.dock_source.show()
         
-        # 6. Properties Tabbed with Source
+        # 5. Properties Tabbed with Source
         self.tabifyDockWidget(self.dock_source, self.dock_props)
-        self.dock_props.show()
         
-        # Sizing
-        self.resizeDocks([self.dock_project, self.dock_timeline], [400, 1200], Qt.Horizontal)
+        # Ensure everything is visible
+        for dock in self.docks_list.values(): dock.setVisible(True)
+        self.dock_project.raise_() # Bring Bin to front
+        self.dock_source.raise_()  # Bring Source to front
 
-    def reset_to_effects_layout(self):
-        # Different arrangement prioritizing effects
-        self.splitDockWidget(self.dock_program, self.dock_props, Qt.Horizontal)
+        # Resize Logic (approx 40% left / 60% right)
+        self.resizeDocks([self.dock_project, self.dock_timeline], [500, 1100], Qt.Horizontal)
+
+    def reset_layout_effects(self):
+        """ Layout optimized for Effects Work """
+        # Move Effects Panel to Right column
+        self.splitDockWidget(self.dock_program, self.dock_effects, Qt.Horizontal)
         self.dock_effects.show()
-        self.addDockWidget(Qt.RightDockWidgetArea, self.dock_effects)
+        # Bring Properties to front on the left
+        self.dock_props.raise_()
 
-    def restore_user_layout(self):
-        # Check if saved data exists
-        saved_state = self.settings.value("windowState")
-        saved_geom = self.settings.value("geometry")
-        
-        if saved_state:
-            self.restoreState(saved_state)
-            self.restoreGeometry(saved_geom)
-        else:
-            # First Run
-            self.reset_to_default_editing()
-
-    def save_current_layout(self):
-        self.settings.setValue("windowState", self.saveState())
+    def save_layout_state(self):
+        self.settings.setValue("state", self.saveState())
         self.settings.setValue("geometry", self.saveGeometry())
 
-    def closeEvent(self, e):
-        # Auto-Save Layout on Close
-        self.save_current_layout()
-        self.player.stop()
-        e.accept()
+    def restore_layout_state(self):
+        state = self.settings.value("state")
+        geo = self.settings.value("geometry")
+        
+        if state:
+            self.restoreGeometry(geo)
+            self.restoreState(state)
+        else:
+            self.reset_layout_editing()
 
-    # -------------------------------
-    # LOGIC (Player Wires)
-    # -------------------------------
-    def init_logic_connections(self):
-        self.bin_widget.itemDoubleClicked.connect(self.load_media_from_bin)
+    def closeEvent(self, e):
+        self.player.stop()
+        self.save_layout_state()
+        super().closeEvent(e)
+
+    # ------------------------------------------
+    #  CORE LOGIC (Loading, Playing, Updating)
+    # ------------------------------------------
+    def init_connections(self):
+        # 1. File IO
+        self.bin_widget.itemDoubleClicked.connect(self.on_bin_double_click)
+        
+        # 2. Transport
         self.monitor_widget.btn_play.clicked.connect(self.toggle_play)
-        self.monitor_widget.slider.sliderPressed.connect(self.pause)
-        self.monitor_widget.slider.sliderReleased.connect(self.seek)
+        self.monitor_widget.slider.sliderPressed.connect(self.pause_user_seek)
+        self.monitor_widget.slider.sliderReleased.connect(self.perform_seek)
 
     def import_file(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Import", "", "Video (*.mp4 *.mov *.mkv *.avi)")
+        path, _ = QFileDialog.getOpenFileName(self, "Import Video", "", "Video (*.mp4 *.mov *.mkv *.avi)")
         if path:
-            name = os.path.basename(path)
-            self.bin_widget.add_item(name, "File", path)
+            filename = os.path.basename(path)
+            self.bin_widget.add_item(filename, "Video", path)
+            # Auto-Load
             self.load_media(path)
 
-    def load_media_from_bin(self, item, col):
+    def on_bin_double_click(self, item, col):
         path = item.data(0, Qt.UserRole)
         if path: self.load_media(path)
 
     def load_media(self, path):
+        # Reset Logic
         self.player.stop()
-        m = self.vlc_inst.media_new(path)
-        self.player.set_media(m)
+        
+        # Load VLC Media
+        media = self.vlc_inst.media_new(path)
+        self.player.set_media(media)
+        
+        # Bind to Window
         win_id = int(self.monitor_widget.video_surface.winId())
-        if sys.platform == "win32": self.player.set_hwnd(win_id)
-        else: self.player.set_xwindow(win_id)
+        if sys.platform == "win32":
+            self.player.set_hwnd(win_id)
+        elif sys.platform.startswith("linux"):
+            self.player.set_xwindow(win_id)
+            
+        # Play
         self.player.play()
         self.timer.start()
+        
+        # --- TRIGGER RUST TIMELINE GENERATION ---
+        # This sends the file path to the Timeline widget, 
+        # which starts the background Rust thread.
+        self.timeline_widget.load_waveform(path)
 
     def toggle_play(self):
         if self.player.is_playing(): self.player.pause()
         else: self.player.play()
 
-    def pause(self): self.player.pause()
-    def seek(self):
+    def pause_user_seek(self):
+        """ Pause video when dragging slider so it doesn't stutter """
+        self.player.pause()
+
+    def perform_seek(self):
         pos = self.monitor_widget.slider.value()
-        self.player.set_position(pos / 1000.0)
+        target = pos / 1000.0
+        self.player.set_position(target)
         self.player.play()
 
-    def update_clock(self):
+    def update_ui_from_player(self):
+        """ Called every 50ms to sync UI with Video State """
         if self.player.is_playing() and not self.monitor_widget.slider.isSliderDown():
+            # Update Slider
             pos = self.player.get_position()
             self.monitor_widget.slider.setValue(int(pos * 1000))
+            
+            # Update Timecode
             ms = self.player.get_time()
-            sec = max(0, ms // 1000)
-            m, s = divmod(sec, 60)
-            self.monitor_widget.lbl_time.setText(f"00:{m:02}:{s:02}:00")
+            seconds = max(0, ms // 1000)
+            m, s = divmod(seconds, 60)
+            # Simple Frame fake logic (assuming 30fps)
+            f = int((ms % 1000) / 33.33)
+            
+            time_str = f"{m:02}:{s:02}:{f:02}"
+            self.monitor_widget.lbl_time.setText(time_str)

@@ -1,27 +1,34 @@
-# core/ai_engine.py
-import whisper
-import os
-import subprocess
+import threading
+import time
 
-def transcribe_video(video_path: str, model_size: str = "base"):
+class AIEngine:
+    """ 
+    Handles background AI tasks (Captioning, Object Removal).
+    Actual implementation will use libraries like 'faster-whisper' or 'stable-diffusion' later.
     """
-    Runs Whisper AI.
-    Returns: List of subtitle dictionaries or raises Exception.
-    """
-    try:
-        model = whisper.load_model(model_size)
-        
-        # Fast ffmpeg audio extraction
-        temp_audio = "temp_ai.wav"
-        command = f'ffmpeg -y -i "{video_path}" -ar 16000 -ac 1 -c:a pcm_s16le "{temp_audio}"'
-        subprocess.run(command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        
-        result = model.transcribe(temp_audio)
-        
-        if os.path.exists(temp_audio):
-            os.remove(temp_audio)
-            
-        return result["segments"]
     
-    except Exception as e:
-        raise e
+    def __init__(self):
+        self.is_busy = False
+
+    def auto_caption(self, audio_path, on_complete_callback):
+        """ Runs transcription in a background thread """
+        if self.is_busy: return False
+        
+        self.is_busy = True
+        t = threading.Thread(target=self._run_captioning, args=(audio_path, on_complete_callback))
+        t.start()
+        return True
+
+    def _run_captioning(self, audio_path, callback):
+        print(f"🤖 AI: Starting transcription for {audio_path}")
+        # --- STUB: SIMULATE AI WORK ---
+        time.sleep(2) 
+        # In future, put OpenAI/Whisper code here
+        result = [
+            {"start": 0.5, "end": 2.0, "text": "Hello world"},
+            {"start": 2.2, "end": 4.0, "text": "Welcome to Kanha Studio"}
+        ]
+        # ------------------------------
+        print("🤖 AI: Transcription Complete")
+        self.is_busy = False
+        callback(result)
