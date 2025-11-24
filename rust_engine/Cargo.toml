@@ -1,6 +1,6 @@
 [package]
 name = "kanha_core"
-version = "0.1.0"
+version = "0..0"
 edition = "2021"
 
 # This makes it a Python Plugin (.pyd / .so)
@@ -9,5 +9,7 @@ name = "kanha_core"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.20", features = ["extension-module"] }
-symphonia = { version = "0.5", features = ["aac", "mp3", "pcm", "isomp4", "mkv"] }
+pyo3 = { version = "0.22", features = ["extension-module"] }
+symphonia = { version = "0.5", features = ["all", "opt-simd"] }
+ffmpeg-next = "7.0"
+thiserror = "1.0"
