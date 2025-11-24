@@ -3,12 +3,14 @@ mod internal;
 mod audio;
 mod video;
 mod export;
+mod effects; // <--- Register Effects
 
 #[pymodule]
 fn kanha_core(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<audio::AudioClip>()?;
     m.add_class::<video::VideoClip>()?;
-    m.add_class::<export::VideoExporter>()?; // <--- Register Class
+    m.add_class::<export::VideoExporter>()?;
+    m.add_class::<effects::ImageProcessor>()?; // <--- Add Class
     Ok(())
 }
 // I am fed up with this Rust-Python interop stuff.
