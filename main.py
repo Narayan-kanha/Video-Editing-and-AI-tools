@@ -1,18 +1,16 @@
-# main.py
-import customtkinter as ctk
-from ui.styles import Theme
+import sys
+from PySide6.QtWidgets import QApplication
 from ui.main_window import MainWindow
 
 if __name__ == "__main__":
-    ctk.set_appearance_mode("dark")
-    ctk.set_default_color_theme("dark-blue")
+    app = QApplication(sys.argv)
+    app.setStyle("Fusion")
     
-    app = ctk.CTk()
-    app.title("Kanha AI Studio - Modular Edition")
-    app.geometry("1600x900")
-    app.configure(fg_color=Theme.BG_MAIN)
+    # Required for QSettings to store data correctly on your PC
+    app.setOrganizationName("KanhaStudios")
+    app.setApplicationName("KanhaEditor")
     
-    # ACTIVATE THE GUI
-    gui = MainWindow(app) 
+    window = MainWindow()
+    window.show()
     
-    app.mainloop()
+    sys.exit(app.exec())
