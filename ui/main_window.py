@@ -1,6 +1,6 @@
 import sys
 import os
-import vlc
+import vlc # type: ignore
 from PySide6.QtWidgets import (QMainWindow, QDockWidget, QLabel, QWidget, QFileDialog, QApplication, QMessageBox)
 from PySide6.QtCore import Qt, QTimer, QSettings
 
