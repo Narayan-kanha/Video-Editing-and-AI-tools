@@ -1,17 +1,16 @@
 use pyo3::prelude::*;
-
-mod clip;
 mod internal;
+mod audio;
+mod video;
+mod export;
 
-use clip::AudioClip;
-
-// The signature must accept a `&Bound<'_, PyModule>`
 #[pymodule]
 fn kanha_core(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<AudioClip>()?;
+    m.add_class::<audio::AudioClip>()?;
+    m.add_class::<video::VideoClip>()?;
+    m.add_class::<export::VideoExporter>()?; // <--- Register Class
     Ok(())
 }
-
 // I am fed up with this Rust-Python interop stuff.
 // Just make it work somehow.
 // - Lakshmi Narayan

@@ -1,15 +1,21 @@
 [package]
 name = "kanha_core"
-version = "0..0"
+version = "0.5.0"
 edition = "2021"
 
-# This makes it a Python Plugin (.pyd / .so)
 [lib]
 name = "kanha_core"
 crate-type = ["cdylib"]
 
 [dependencies]
+# Python interaction
 pyo3 = { version = "0.22", features = ["extension-module"] }
+
+# Audio Engine
 symphonia = { version = "0.5", features = ["all", "opt-simd"] }
-ffmpeg-next = "7.0"
-thiserror = "1.0"
+hound = "3.5"  # Wav export support
+
+# Video Engine with "Deep Embed" flags
+# "static": Bakes the code into your .pyd (Standalone)
+# "build":  Downloads and builds FFmpeg if missing
+ffmpeg-next = { version = "7.0", features = ["static", "build"] }
