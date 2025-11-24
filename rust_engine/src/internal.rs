@@ -21,28 +21,23 @@ impl AudioReader {
     pub fn new(path: &str) -> AudioResult<Self> {
         let src = File::open(Path::new(path))?;
         let mss = MediaSourceStream::new(Box::new(src), Default::default());
-
         let mut hint = Hint::new();
         if let Some(ext) = Path::new(path).extension().and_then(|e| e.to_str()) {
             hint.with_extension(ext);
         }
 
-        let probed = symphonia::default::get_probe()
-            .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())?;
-
+        let probed = symphonia::default::get_probe().format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())?;
         let format = probed.format;
-        let track = format.tracks().iter().find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
-            .ok_or("No supported audio track found")?;
-
+        let track = format.tracks().iter().find(|t| t.codec_params.codec != CODEC_TYPE_NULL).ok_or("No Audio Track")?;
+        
         let track_id = track.id;
-        let codec_params = track.codec_params.clone();
-        let sample_rate = codec_params.sample_rate.unwrap_or(44100);
-        let duration_frames = codec_params.n_frames;
-        let channels = codec_params.channels.map(|c| c.count() as u32).unwrap_or(2);
+        let params = track.codec_params.clone();
+        let sr = params.sample_rate.unwrap_or(44100);
+        let ch = params.channels.map(|c| c.count() as u32).unwrap_or(2);
+        let dur = params.n_frames;
 
-        let decoder = symphonia::default::get_codecs()
-            .make(&codec_params, &DecoderOptions::default())?;
+        let decoder = symphonia::default::get_codecs().make(&params, &DecoderOptions::default())?;
 
-        Ok(Self { format, decoder, track_id, sample_rate, duration_frames, channels })
+        Ok(Self { format, decoder, track_id, sample_rate: sr, duration_frames: dur, channels: ch })
     }
 }

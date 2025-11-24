@@ -23,121 +23,187 @@ pub struct VideoClip {
 impl VideoClip {
     #[new]
     fn new(path: String) -> PyResult<Self> {
-        ffmpeg::init().ok(); // Ignore errors here, just proceed
+        // Initialize without crashing if already inited
+        ffmpeg::init().ok();
+
         let ictx = input(&path).map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
         
         let stream = ictx.streams().best(Type::Video).ok_or_else(|| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("No video stream")
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("No video stream found")
         })?;
 
-        let context = ffmpeg::codec::context::Context::from_parameters(stream.parameters()).unwrap();
-        let decoder = context.decoder().video().unwrap();
-        let w = decoder.width();
-        let h = decoder.height();
+        // Initialize Decoder
+        let context = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        let decoder = context.decoder().video()
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
-        // --- THE "REMOVE IT" FIX ---
-        // Instead of doing manual math (which caused your crash),
-        // we use the generic "From" implementation directly.
-        
-        // 1. Timebase (Converts "1/30" to 0.033)
+        // --- SAFE MATH (Avoids Cast Errors) ---
+        // 1. TimeBase: Use standard FROM implementation
         let time_base = f64::from(stream.time_base()); 
         
-        // 2. Duration (Integers * Timebase)
-        let dur_ticks = stream.duration();
-        let duration = if dur_ticks > 0 { dur_ticks as f64 * time_base } else { 0.0 };
+        // 2. Duration: Stream duration is ticks, convert to seconds
+        let ticks = stream.duration();
+        let duration = if ticks > 0 { ticks as f64 * time_base } else { 0.0 };
         
         // 3. FPS
         let fps = f64::from(stream.avg_frame_rate());
 
         Ok(VideoClip {
             path,
-            width: w,
-            height: h,
-            duration, // If invalid, it defaults to 0.0 safely
-            fps: if fps > 0.0 { fps } else { 30.0 },
+            width: decoder.width(),
+            height: decoder.height(),
+            duration,
+            fps: if fps > 0.0 { fps } else { 30.0 }, // Fallback
         })
     }
 
-    /// Generates thumbnail list
+    /// FEATURE: PROXIES
+    /// Returns a list of low-res bytes for drawing timelines
     fn get_timeline_strip<'py>(&self, py: Python<'py>, count: usize, width: u32, height: u32) -> PyResult<Vec<Py<PyBytes>>> {
-        let mut ictx = input(&self.path).unwrap();
+        let mut ictx = input(&self.path).map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
         let stream = ictx.streams().best(Type::Video).unwrap();
-        let dur = stream.duration();
         let stream_idx = stream.index();
-        
-        let mut decoder = ffmpeg::codec::context::Context::from_parameters(stream.parameters()).unwrap().decoder().video().unwrap();
-        let mut scaler = Context::get(decoder.format(), decoder.width(), decoder.height(), Pixel::RGB24, width, height, Flags::BILINEAR).unwrap();
+        let duration_raw = stream.duration();
 
-        let mut res = Vec::new();
-        // Safe step calculation (no casting nonsense)
-        let step = if count > 0 && dur > 0 { dur / count as i64 } else { 0 };
+        let mut decoder = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
+            .unwrap().decoder().video().unwrap();
+
+        // Bilinear is faster for small thumbnails
+        let mut scaler = Context::get(
+            decoder.format(), decoder.width(), decoder.height(),
+            Pixel::RGB24, width, height, Flags::BILINEAR
+        ).unwrap();
+
+        let mut results = Vec::with_capacity(count);
+        
+        // Safety Math for stepping
+        let step = if count > 0 && duration_raw > 0 { duration_raw / count as i64 } else { 0 };
 
         for i in 0..count {
-            let t = (i as i64 * step).max(0);
-            let _ = ictx.seek(t, ..t); // Force ignore result
+            let target_ts = (i as i64 * step).max(0);
+            
+            // "fire and forget" seek
+            let _ = ictx.seek(target_ts, ..target_ts);
 
             let mut decoded = Video::empty();
             let mut rgb = Video::empty();
             let mut found = false;
-            
-            for (s, p) in ictx.packets() {
+
+            // Packet loop
+            for (s, packet) in ictx.packets() {
                 if s.index() == stream_idx {
-                    decoder.send_packet(&p).ok();
+                    decoder.send_packet(&packet).ok();
                     if decoder.receive_frame(&mut decoded).is_ok() {
-                        scaler.run(&decoded, &mut rgb).ok();
-                        let d = rgb.data(0);
-                        let stride = rgb.stride(0);
-                        let mut buf = Vec::with_capacity((width*height*3) as usize);
-                        
-                        for y in 0..height {
-                            let idx = y as usize * stride;
-                            let end = idx + (width as usize * 3);
-                            if end <= d.len() { buf.extend_from_slice(&d[idx..end]); }
+                        if scaler.run(&decoded, &mut rgb).is_ok() {
+                            // Manual Buffer Copy to ensure RGB structure
+                            let data = rgb.data(0);
+                            let stride = rgb.stride(0);
+                            let mut buf = Vec::with_capacity((width * height * 3) as usize);
+                            
+                            for y in 0..height {
+                                let start = y as usize * stride;
+                                let end = start + (width as usize * 3);
+                                if end <= data.len() {
+                                    buf.extend_from_slice(&data[start..end]);
+                                }
+                            }
+                            results.push(PyBytes::new_bound(py, &buf).into());
+                            found = true;
+                            break; 
                         }
-                        res.push(PyBytes::new_bound(py, &buf).into());
-                        found = true;
-                        break;
                     }
                 }
             }
+            // Padding if missing (duplicate previous)
             if !found {
-                if let Some(prev) = res.last() { res.push(prev.clone()); }
-                else { res.push(PyBytes::new_bound(py, &vec![0; (width*height*3) as usize]).into()); }
+                 if let Some(last) = results.last() { results.push(last.clone()); }
+                 else { results.push(PyBytes::new_bound(py, &vec![0u8; (width*height*3) as usize]).into()); }
             }
         }
-        Ok(res)
+        Ok(results)
     }
 
-    /// Fast Scrub
-    fn get_keyframe<'py>(&self, py: Python<'py>, sec: f64, w: u32, h: u32) -> PyResult<Py<PyBytes>> {
+    /// FEATURE: FAST SCRUB
+    /// Jumps to nearest keyframe. Not precise, but Instant (0s delay).
+    /// Used for sliding the seek bar.
+    fn get_keyframe<'py>(&self, py: Python<'py>, time_secs: f64, width: u32, height: u32) -> PyResult<Py<PyBytes>> {
         let mut ictx = input(&self.path).unwrap();
         let stream = ictx.streams().best(Type::Video).unwrap();
-        let tb = f64::from(stream.time_base());
-        let ts = if tb > 0.0 { (sec / tb) as i64 } else { 0 };
+        
+        let time_base = f64::from(stream.time_base());
+        let ts = if time_base > 0.0 { (time_secs / time_base) as i64 } else { 0 };
+        
+        // Fast seek to nearest keyframe
+        let _ = ictx.seek(ts, ..ts); 
 
-        let _ = ictx.seek(ts, ..ts); // Ignore output
-        let mut decoder = ffmpeg::codec::context::Context::from_parameters(stream.parameters()).unwrap().decoder().video().unwrap();
-        let mut scaler = Context::get(decoder.format(), decoder.width(), decoder.height(), Pixel::RGB24, w, h, Flags::FAST_BILINEAR).unwrap();
+        let mut decoder = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
+            .unwrap().decoder().video().unwrap();
+        let mut scaler = Context::get(
+            decoder.format(), decoder.width(), decoder.height(),
+            Pixel::RGB24, width, height, Flags::FAST_BILINEAR // Use Fast Bilinear for UI
+        ).unwrap();
 
-        for (s, p) in ictx.packets() {
+        for (s, packet) in ictx.packets() {
             if s.index() == stream.index() {
-                decoder.send_packet(&p).ok();
-                let mut d = Video::empty();
-                if decoder.receive_frame(&mut d).is_ok() {
-                    let mut r = Video::empty();
-                    scaler.run(&d, &mut r).ok();
-                    let dt = r.data(0);
-                    let st = r.stride(0);
-                    let mut b = Vec::new();
-                    for y in 0..h {
-                        let i = y as usize * st;
-                        let e = i + (w as usize * 3);
-                        if e <= dt.len() { b.extend_from_slice(&dt[i..e]); }
+                decoder.send_packet(&packet).ok();
+                let mut decoded = Video::empty();
+                if decoder.receive_frame(&mut decoded).is_ok() {
+                    let mut rgb = Video::empty();
+                    scaler.run(&decoded, &mut rgb).ok();
+                    
+                    let data = rgb.data(0);
+                    let stride = rgb.stride(0);
+                    let mut buf = Vec::new();
+                    for y in 0..height {
+                        let i = y as usize * stride;
+                        let e = i + (width as usize * 3);
+                        if e <= data.len() { buf.extend_from_slice(&data[i..e]); }
                     }
-                    return Ok(PyBytes::new_bound(py, &b).into());
+                    return Ok(PyBytes::new_bound(py, &buf).into());
                 }
             }
         }
-        Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("No frame"))
+        Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Frame decode error"))
+    }
+
+    /// FEATURE: PRECISE RENDERING FRAME
+    /// Scans accurately to specific timestamp. Slower, but used for Final Export.
+    fn get_exact_frame<'py>(&self, py: Python<'py>, time_secs: f64, width: u32, height: u32) -> PyResult<Py<PyBytes>> {
+        let mut ictx = input(&self.path).unwrap();
+        let stream = ictx.streams().best(Type::Video).unwrap();
+        let idx = stream.index();
+        let time_base = f64::from(stream.time_base());
+        let target_pts = if time_base > 0.0 { (time_secs / time_base) as i64 } else { 0 };
+        
+        let _ = ictx.seek(target_pts, ..target_pts); 
+        
+        let mut decoder = ffmpeg::codec::context::Context::from_parameters(stream.parameters()).unwrap().decoder().video().unwrap();
+        let mut scaler = Context::get(decoder.format(), decoder.width(), decoder.height(), Pixel::RGB24, width, height, Flags::BICUBIC).unwrap(); // High Quality Bicubic
+
+        for (s, packet) in ictx.packets() {
+            if s.index() == idx {
+                decoder.send_packet(&packet).ok();
+                let mut decoded = Video::empty();
+                while decoder.receive_frame(&mut decoded).is_ok() {
+                    // Check if we reached the frame
+                    let pts = decoded.pts().unwrap_or(0);
+                    if pts >= target_pts {
+                        let mut rgb = Video::empty();
+                        scaler.run(&decoded, &mut rgb).ok();
+                        let data = rgb.data(0);
+                        let stride = rgb.stride(0);
+                        let mut buf = Vec::with_capacity((width*height*3) as usize);
+                        for y in 0..height {
+                            let i = y as usize * stride;
+                            let e = i + (width as usize * 3);
+                            if e <= data.len() { buf.extend_from_slice(&data[i..e]); }
+                        }
+                        return Ok(PyBytes::new_bound(py, &buf).into());
+                    }
+                }
+            }
+        }
+        Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("EOF/No Frame"))
     }
 }
